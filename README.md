@@ -129,6 +129,93 @@ end
 4. Deploy and run the migration
 5. Remove the line added in step 1
 
+### Adding a column with a default value
+
+#### Bad
+
+In earlier versions of Postgres, MySQL, and MariaDB, adding a column with a default value to an existing table causes the entire table to be rewritten. During this time, reads and writes are blocked in Postgres, and writes are blocked in MySQL and MariaDB.
+
+```ruby
+class AddSomeColumnToUsers < ActiveRecord::Migration[7.1]
+  def change
+    add_column :users, :some_column, :text, default: "default_value"
+  end
+end
+```
+
+In Postgres 11+, MySQL 8.0.12+, and MariaDB 10.3.2+, this no longer requires a table rewrite and is safe (except for volatile functions like `gen_random_uuid()`).
+
+#### Good
+
+Instead, add the column without a default value, then change the default.
+
+```ruby
+class AddSomeColumnToUsers < ActiveRecord::Migration[7.1]
+  def up
+    add_column :users, :some_column, :text
+    change_column_default :users, :some_column, "default_value"
+  end
+
+  def down
+    remove_column :users, :some_column
+  end
+end
+```
+
+See the next section for how to backfill.
+
+### Backfilling data
+
+#### Bad
+
+Active Record creates a transaction around each migration, and backfilling in the same transaction that alters a table keeps the table locked for the [duration of the backfill](https://wework.github.io/data/2015/11/05/add-columns-with-default-values-to-large-tables-in-rails-postgres/).
+
+```ruby
+class AddSomeColumnToUsers < ActiveRecord::Migration[7.1]
+  def change
+    add_column :users, :some_column, :text
+    User.update_all some_column: "default_value"
+  end
+end
+```
+
+Also, running a single query to update data can cause issues for large tables.
+
+#### Good
+
+There are three keys to backfilling safely: batching, throttling, and running it outside a transaction. Use the Rails console or a separate migration with `disable_ddl_transaction!`.
+
+```ruby
+class BackfillSomeColumn < ActiveRecord::Migration[7.1]
+  disable_ddl_transaction!
+
+  def up
+    User.unscoped.in_batches do |relation|
+      relation.update_all some_column: "default_value"
+      sleep(0.01) # throttle
+    end
+  end
+end
+```
+
+### Adding a stored generated column
+
+#### Bad
+
+Adding a stored generated column causes the entire table to be rewritten. During this time, reads and writes are blocked in Postgres, and writes are blocked in MySQL and MariaDB.
+
+```ruby
+class AddSomeColumnToUsers < ActiveRecord::Migration[7.1]
+  def change
+    add_column :users, :some_column, :virtual, type: :string, as: "...", stored: true
+  end
+end
+```
+
+#### Good
+
+Add a non-generated column and use callbacks or triggers instead (or a virtual generated column with MySQL and MariaDB).
+
 ### Changing the type of a column
 
 #### Bad

@@ -44,7 +44,7 @@ module StrongMigrations
       end
 
       def add_column_default_safe?
-        true
+        server_version >= Gem::Version.new("8.0.12")
       end
 
       def change_type_safe?(table, column, type, options, existing_column, existing_type)
